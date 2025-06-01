@@ -1,0 +1,1616 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+   <meta charset="UTF-8">
+   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+   <title>Sterling Contractors - Hardware & Services</title>
+   <meta name="description" content="Sterling Contractors offers quality hardware products and expert contracting services in Kampala, Uganda. Learn about our unique deposit-based model.">
+   <meta name="keywords" content="hardware contractors Kampala, building materials Uganda, home renovation Kampala, Sterling Contractors, hardware store Uganda, deposit model construction">
+   
+   <script src="https://cdn.tailwindcss.com"></script>
+   
+   <link rel="preconnect" href="https://fonts.googleapis.com">
+   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+   <script src="https://unpkg.com/lucide-react@0.292.0/dist/umd/lucide.min.js"></script>
+
+   <script type="module">
+       // Firebase SDK imports
+       import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+       import { 
+           getAuth, 
+           onAuthStateChanged, 
+           createUserWithEmailAndPassword, 
+           signInWithEmailAndPassword, 
+           signOut, 
+           GoogleAuthProvider, 
+           signInWithPopup,
+           sendEmailVerification
+       } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+       import { 
+           getFirestore, 
+           collection, 
+           doc, 
+           addDoc, 
+           getDoc, 
+           getDocs, 
+           setDoc, 
+           query, 
+           where,
+           onSnapshot,
+           orderBy, // Note: extensive use of orderBy might require composite indexes.
+           limit
+       } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+       import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
+
+       // --- Firebase Configuration ---
+       // IMPORTANT: Replace with your actual Firebase config object
+       const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+           apiKey: "YOUR_API_KEY", // Replace if not using __firebase_config
+           authDomain: "YOUR_AUTH_DOMAIN",
+           projectId: "YOUR_PROJECT_ID",
+           storageBucket: "YOUR_STORAGE_BUCKET",
+           messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+           appId: "YOUR_APP_ID"
+       };
+
+       const app = initializeApp(firebaseConfig);
+       const auth = getAuth(app);
+       const db = getFirestore(app);
+       const storage = getStorage(app); // If you plan to use Firebase Storage
+
+       // App ID for Firestore paths
+       const appId = typeof __app_id !== 'undefined' ? __app_id : 'sterling-contractors-dev';
+
+       // --- Global App State & UI Elements ---
+       let currentUser = null;
+       let currentUserId = null; // Will be auth.currentUser.uid or a random ID for anonymous
+
+       // UI Elements (cache them for performance)
+       const mainContentArea = document.getElementById('mainContent');
+       const loadingIndicator = document.getElementById('loadingIndicator');
+       const authSection = document.getElementById('authSection');
+       const userProfileSection = document.getElementById('userProfileSection');
+       const userNameDisplay = document.getElementById('userNameDisplay');
+       const userEmailDisplay = document.getElementById('userEmailDisplay');
+       const loginButtonNav = document.getElementById('loginButtonNav');
+       const signupButtonNav = document.getElementById('signupButtonNav');
+       const logoutButtonNav = document.getElementById('logoutButtonNav');
+       const mobileMenuButton = document.getElementById('mobileMenuButton');
+       const mobileNavMenu = document.getElementById('mobileNavMenu');
+       const cartItemCount = document.getElementById('cartItemCount');
+
+       // --- Helper Functions ---
+       function showLoading() { loadingIndicator.classList.remove('hidden'); }
+       function hideLoading() { loadingIndicator.classList.add('hidden'); }
+       
+       function showToast(message, type = 'success') {
+           const toast = document.getElementById('toastNotification');
+           const toastMessage = document.getElementById('toastMessage');
+           toastMessage.textContent = message;
+           
+           toast.classList.remove('hidden', 'bg-green-500', 'bg-red-500', 'bg-blue-500');
+           if (type === 'success') toast.classList.add('bg-green-500');
+           else if (type === 'error') toast.classList.add('bg-red-500');
+           else toast.classList.add('bg-blue-500');
+           
+           toast.classList.remove('opacity-0', 'translate-y-full');
+           toast.classList.add('opacity-100', 'translate-y-0');
+
+           setTimeout(() => {
+               toast.classList.remove('opacity-100', 'translate-y-0');
+               toast.classList.add('opacity-0', 'translate-y-full');
+               setTimeout(() => toast.classList.add('hidden'), 500);
+           }, 3000);
+       }
+
+       // --- Authentication ---
+       onAuthStateChanged(auth, async (user) => {
+           if (user) {
+               currentUser = user;
+               currentUserId = user.uid;
+               console.log("User logged in:", user.email, "UID:", currentUserId);
+               userNameDisplay.textContent = user.displayName || user.email.split('@')[0];
+               userEmailDisplay.textContent = `UID: ${currentUserId}`; // Display UID for reference as requested
+               
+               authSection.classList.add('hidden');
+               userProfileSection.classList.remove('hidden');
+               loginButtonNav.classList.add('hidden');
+               signupButtonNav.classList.add('hidden');
+               logoutButtonNav.classList.remove('hidden');
+
+               if (!user.emailVerified) {
+                   showToast("Please verify your email address. A new verification email has been sent if the previous one expired.", "info");
+                   // Optionally resend verification email if needed, but be mindful of quotas
+                   // await sendEmailVerification(auth.currentUser);
+               }
+               // Fetch user-specific data or update UI
+               fetchCart(); 
+
+           } else {
+               currentUser = null;
+               currentUserId = crypto.randomUUID(); // For anonymous users if needed for Firestore paths
+               console.log("User logged out or not logged in. Anonymous UID:", currentUserId);
+               userNameDisplay.textContent = '';
+               userEmailDisplay.textContent = '';
+               authSection.classList.remove('hidden');
+               userProfileSection.classList.add('hidden');
+               loginButtonNav.classList.remove('hidden');
+               signupButtonNav.classList.remove('hidden');
+               logoutButtonNav.classList.add('hidden');
+               updateCartCount(0); // Reset cart for logged out user
+           }
+           // Initial page load or navigation after auth state change
+           const currentHash = window.location.hash || '#home';
+           navigateTo(currentHash.substring(1));
+       });
+
+       async function handleSignup(email, password) {
+           showLoading();
+           try {
+               const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+               await sendEmailVerification(userCredential.user);
+               showToast("Signup successful! Please check your email to verify your account.", "success");
+               closeAuthModal();
+           } catch (error) {
+               console.error("Signup error:", error);
+               showToast(`Signup failed: ${error.message}`, "error");
+           } finally {
+               hideLoading();
+           }
+       }
+
+       async function handleLogin(email, password) {
+           showLoading();
+           try {
+               await signInWithEmailAndPassword(auth, email, password);
+               showToast("Login successful!", "success");
+               closeAuthModal();
+           } catch (error) {
+               console.error("Login error:", error);
+               showToast(`Login failed: ${error.message}`, "error");
+           } finally {
+               hideLoading();
+           }
+       }
+       
+       async function handleGoogleLogin() {
+           showLoading();
+           const provider = new GoogleAuthProvider();
+           try {
+               await signInWithPopup(auth, provider);
+               showToast("Google login successful!", "success");
+               closeAuthModal();
+           } catch (error) {
+               console.error("Google login error:", error);
+               showToast(`Google login failed: ${error.message}`, "error");
+           } finally {
+               hideLoading();
+           }
+       }
+
+       async function handleLogout() {
+           showLoading();
+           try {
+               await signOut(auth);
+               showToast("Logout successful!", "success");
+               navigateTo('home'); // Navigate to home after logout
+           } catch (error) {
+               console.error("Logout error:", error);
+               showToast(`Logout failed: ${error.message}`, "error");
+           } finally {
+               hideLoading();
+           }
+       }
+       
+       // --- Firestore Data Paths ---
+       const productsCollectionPath = `/artifacts/${appId}/public/data/products`;
+       const blogPostsCollectionPath = `/artifacts/${appId}/public/data/blogPosts`;
+       const portfolioCollectionPath = `/artifacts/${appId}/public/data/portfolioItems`;
+       const testimonialsCollectionPath = `/artifacts/${appId}/public/data/testimonials`;
+       const cartCollectionPath = (userId) => `/artifacts/${appId}/users/${userId}/cart`;
+
+
+       // --- Cart Functionality (Basic) ---
+       let localCart = {}; // For UI updates, real source of truth is Firestore for logged-in users
+
+       async function addToCart(productId, productName, price, imageUrl) {
+           if (!currentUser) {
+               showToast("Please log in to add items to your cart.", "info");
+               openAuthModal('login');
+               return;
+           }
+           showLoading();
+           try {
+               const cartRef = collection(db, cartCollectionPath(currentUserId));
+               const productInCartRef = doc(cartRef, productId);
+               const productSnap = await getDoc(productInCartRef);
+
+               if (productSnap.exists()) {
+                   const currentQuantity = productSnap.data().quantity;
+                   await setDoc(productInCartRef, { quantity: currentQuantity + 1 }, { merge: true });
+               } else {
+                   await setDoc(productInCartRef, { 
+                       productId, 
+                       productName, 
+                       price, 
+                       imageUrl, 
+                       quantity: 1,
+                       addedAt: new Date()
+                   });
+               }
+               showToast(`${productName} added to cart!`, "success");
+               fetchCart(); // Refresh cart display
+           } catch (error) {
+               console.error("Error adding to cart:", error);
+               showToast("Failed to add item to cart.", "error");
+           } finally {
+               hideLoading();
+           }
+       }
+       
+       async function fetchCart() {
+           if (!currentUser) {
+               updateCartCount(0); // No cart for guests in this simple setup
+               renderCartItems([]); // Clear cart display
+               return;
+           }
+           const cartCol = collection(db, cartCollectionPath(currentUserId));
+           onSnapshot(query(cartCol), (snapshot) => {
+               const items = [];
+               let totalCount = 0;
+               snapshot.forEach(doc => {
+                   const item = { id: doc.id, ...doc.data() };
+                   items.push(item);
+                   totalCount += item.quantity;
+               });
+               localCart = items.reduce((acc, item) => {
+                   acc[item.id] = item;
+                   return acc;
+               }, {});
+               updateCartCount(totalCount);
+               renderCartItems(items); // If cart page is active
+           }, (error) => {
+               console.error("Error fetching cart:", error);
+               showToast("Could not load cart.", "error");
+           });
+       }
+       
+       function updateCartCount(count) {
+           cartItemCount.textContent = count;
+           cartItemCount.classList.toggle('hidden', count === 0);
+       }
+
+       // --- Navigation & Page Rendering ---
+       const pages = {
+           home: renderHomePage,
+           store: renderStorePage,
+           services: renderServicesPage,
+           deposit: renderDepositModelPage,
+           blog: renderBlogPage,
+           contact: renderContactPage,
+           cart: renderCartPage, // Added cart page
+           productDetail: renderProductDetailPage, // For individual products
+           blogDetail: renderBlogDetailPage, // For individual blog posts
+       };
+
+       function navigateTo(pageKey, params = {}) {
+           showLoading();
+           mainContentArea.innerHTML = ''; // Clear previous content
+           
+           const renderer = pages[pageKey];
+           if (renderer) {
+               renderer(params); // Pass params to renderer
+               window.location.hash = pageKey + (params.id ? `/${params.id}` : ''); // Update hash for deep linking
+               // Update active nav link
+               document.querySelectorAll('nav a, #mobileNavMenu a').forEach(link => {
+                   link.classList.remove('text-blue-600', 'font-semibold', 'bg-gray-100');
+                   link.classList.add('text-gray-700');
+                   if (link.getAttribute('href') === `#${pageKey}`) {
+                       link.classList.add('text-blue-600', 'font-semibold', 'bg-gray-100');
+                       link.classList.remove('text-gray-700');
+                   }
+               });
+           } else {
+               mainContentArea.innerHTML = `<div class="text-center p-12"><h1 class="text-3xl font-bold">Page Not Found</h1><p class="mt-4">The page you're looking for doesn't exist.</p> <a href="#home" class="mt-6 inline-block bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors">Go Home</a></div>`;
+               console.error(`Page renderer for "${pageKey}" not found.`);
+           }
+           // Close mobile menu after navigation
+           mobileNavMenu.classList.add('hidden');
+           hideLoading();
+           window.scrollTo(0, 0); // Scroll to top on page change
+       }
+       
+       // --- Page Renderers ---
+
+       // HOME PAGE
+       function renderHomePage() {
+           mainContentArea.innerHTML = `
+               <section class="bg-gradient-to-r from-gray-900 to-gray-800 text-white py-20 md:py-32 relative overflow-hidden">
+                   <div class="absolute inset-0 bg-black opacity-50"></div>
+                   <div class="container mx-auto px-6 text-center relative z-10">
+                       <h1 class="text-4xl md:text-6xl font-extrabold mb-6 leading-tight animate-fade-in-down">Sterling Contractors</h1>
+                       <p class="text-lg md:text-2xl mb-10 text-gray-300 animate-fade-in-up delay-200">Your Trusted Partner for Quality Hardware & Expert Construction Services in Kampala.</p>
+                       <div class="space-x-0 md:space-x-4 space-y-4 md:space-y-0">
+                           <a href="#store" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-8 py-4 rounded-lg text-lg transition-transform transform hover:scale-105 inline-block animate-fade-in-up delay-400">Shop Hardware</a>
+                           <a href="#services" class="bg-transparent border-2 border-white hover:bg-white hover:text-gray-900 text-white font-semibold px-8 py-4 rounded-lg text-lg transition-all inline-block animate-fade-in-up delay-600">Explore Services</a>
+                       </div>
+                   </div>
+               </section>
+
+               <section class="py-16 bg-gray-50">
+                   <div class="container mx-auto px-6 text-center">
+                       <h2 class="text-3xl font-bold text-gray-800 mb-4">A Smarter Way to Build: Our Deposit Model</h2>
+                       <p class="text-gray-600 mb-8 max-w-2xl mx-auto">We believe in transparency and partnership. Our unique deposit-based capital model helps us secure the best materials and services for your project, ensuring quality and timely completion. </p>
+                       <a href="#deposit" class="text-blue-600 hover:text-blue-800 font-semibold text-lg">Learn More →</a>
+                   </div>
+               </section>
+
+               <section class="py-16">
+                   <div class="container mx-auto px-6">
+                       <h2 class="text-3xl font-bold text-gray-800 mb-10 text-center">Featured Hardware</h2>
+                       <div id="featuredProductsGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
+                           </div>
+                       <div class="text-center mt-12">
+                           <a href="#store" class="bg-gray-800 hover:bg-gray-900 text-white font-semibold px-8 py-3 rounded-lg transition-colors">View All Products</a>
+                       </div>
+                   </div>
+               </section>
+               
+               <section class="py-16 bg-gray-100">
+                   <div class="container mx-auto px-6">
+                       <h2 class="text-3xl font-bold text-gray-800 mb-10 text-center">Our Contracting Expertise</h2>
+                       <div class="grid md:grid-cols-2 gap-10 items-center">
+                           <div>
+                               <img src="https://placehold.co/600x400/e2e8f0/334155?text=Modern+Construction" alt="Contracting Services" class="rounded-lg shadow-xl object-cover w-full h-auto">
+                           </div>
+                           <div>
+                               <p class="text-gray-700 text-lg mb-6">From residential renovations to commercial constructions, Sterling Contractors delivers excellence. Our experienced team manages every aspect of your project, ensuring quality craftsmanship and adherence to timelines.</p>
+                               <ul class="space-y-3 text-gray-700 mb-8">
+                                   <li class="flex items-center"><i data-lucide="check-circle" class="text-blue-600 mr-3"></i> Residential & Commercial Projects</li>
+                                   <li class="flex items-center"><i data-lucide="check-circle" class="text-blue-600 mr-3"></i> New Builds & Renovations</li>
+                                   <li class="flex items-center"><i data-lucide="check-circle" class="text-blue-600 mr-3"></i> Project Management & Consultation</li>
+                                   <li class="flex items-center"><i data-lucide="check-circle" class="text-blue-600 mr-3"></i> Skilled Craftsmanship</li>
+                               </ul>
+                               <a href="#services" class="text-blue-600 hover:text-blue-800 font-semibold text-lg">Discover Our Services →</a>
+                           </div>
+                       </div>
+                   </div>
+               </section>
+
+               <section class="py-20 bg-blue-600 text-white">
+                   <div class="container mx-auto px-6 text-center">
+                       <h2 class="text-3xl font-bold mb-6">Ready to Start Your Project?</h2>
+                       <p class="text-lg mb-8 max-w-xl mx-auto">Get an instant preliminary estimate for your construction or renovation project using our AI-Powered Estimator.</p>
+                       <button id="aiEstimatorBtnHome" class="bg-white text-blue-700 font-bold px-10 py-4 rounded-lg text-lg hover:bg-gray-100 transition-colors shadow-lg">Get AI Estimate</button>
+                   </div>
+               </section>
+           `;
+           loadFeaturedProducts();
+           lucide.createIcons(); // Initialize Lucide icons
+           document.getElementById('aiEstimatorBtnHome').addEventListener('click', () => openAiEstimatorModal());
+       }
+       
+       // STORE PAGE
+       async function renderStorePage() {
+           mainContentArea.innerHTML = `
+               <section class="py-12 bg-gray-50">
+                   <div class="container mx-auto px-6">
+                       <div class="flex flex-col md:flex-row justify-between items-center mb-8">
+                           <h1 class="text-4xl font-bold text-gray-800 mb-4 md:mb-0">Hardware Store</h1>
+                           <div class="flex space-x-4 items-center">
+                               <input type="text" id="searchInput" placeholder="Search products..." class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                               <select id="categoryFilter" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                   <option value="">All Categories</option>
+                                   </select>
+                           </div>
+                       </div>
+                       <div id="productsGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
+                           </div>
+                       <div id="storeLoading" class="text-center py-8 hidden">Loading products...</div>
+                       <div id="noProductsMessage" class="text-center py-8 hidden">No products found.</div>
+                   </div>
+               </section>
+               <section class="py-12 bg-white">
+                   <div class="container mx-auto px-6">
+                       <h2 class="text-2xl font-semibold text-gray-800 mb-6">You Might Also Like (AI Powered)</h2>
+                       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                           ${[1,2,3,4].map(() => `
+                               <div class="bg-gray-100 p-4 rounded-lg animate-pulse">
+                                   <div class="w-full h-32 bg-gray-300 rounded mb-2"></div>
+                                   <div class="h-4 bg-gray-300 rounded w-3/4 mb-1"></div>
+                                   <div class="h-4 bg-gray-300 rounded w-1/2"></div>
+                               </div>
+                           `).join('')}
+                       </div>
+                   </div>
+               </section>
+           `;
+           loadAllProducts();
+           lucide.createIcons();
+           document.getElementById('searchInput').addEventListener('input', (e) => loadAllProducts(e.target.value, document.getElementById('categoryFilter').value));
+           document.getElementById('categoryFilter').addEventListener('change', (e) => loadAllProducts(document.getElementById('searchInput').value, e.target.value));
+
+       }
+       
+       // PRODUCT DETAIL PAGE (can be a modal or a separate view)
+       async function renderProductDetailPage(params) {
+           if (!params.id) {
+               navigateTo('store'); // Redirect if no ID
+               return;
+           }
+           showLoading();
+           try {
+               const productRef = doc(db, productsCollectionPath, params.id);
+               const productSnap = await getDoc(productRef);
+
+               if (productSnap.exists()) {
+                   const product = { id: productSnap.id, ...productSnap.data() };
+                   mainContentArea.innerHTML = `
+                       <section class="py-12 bg-white">
+                           <div class="container mx-auto px-6">
+                               <button onclick="navigateTo('store')" class="mb-6 text-blue-600 hover:underline flex items-center">
+                                   <i data-lucide="arrow-left" class="mr-2 h-5 w-5"></i> Back to Store
+                               </button>
+                               <div class="grid md:grid-cols-2 gap-10 items-start">
+                                   <div>
+                                       <img src="${product.imageUrl || 'https://placehold.co/600x600/e2e8f0/334155?text=Product+Image'}" alt="${product.name}" class="rounded-lg shadow-lg w-full object-cover">
+                                       </div>
+                                   <div>
+                                       <h1 class="text-4xl font-bold text-gray-800 mb-3">${product.name}</h1>
+                                       <p class="text-3xl font-semibold text-blue-600 mb-4">UGX ${product.price.toLocaleString()}</p>
+                                       <div class="flex items-center mb-4">
+                                           <div class="flex text-yellow-400">
+                                               ${[...Array(5)].map((_, i) => `<i data-lucide="star" class="${i < (product.rating || 4) ? 'fill-current' : ''} h-5 w-5"></i>`).join('')}
+                                           </div>
+                                           <span class="ml-2 text-gray-600">(${product.reviewsCount || (Math.floor(Math.random()*100)+10)} reviews)</span>
+                                       </div>
+                                       <p class="text-gray-700 mb-6 leading-relaxed">${product.description || 'Detailed product description not available.'}</p>
+                                       
+                                       <div class="mb-6">
+                                           <h3 class="text-lg font-semibold text-gray-800 mb-2">Specifications:</h3>
+                                           <ul class="list-disc list-inside text-gray-600 space-y-1">
+                                               ${product.specs ? Object.entries(product.specs).map(([key, value]) => `<li><strong>${key}:</strong> ${value}</li>`).join('') : '<li>Specifications not available.</li>'}
+                                           </ul>
+                                       </div>
+
+                                       <button id="addToCartBtnDetail" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg text-lg transition-colors flex items-center justify-center">
+                                           <i data-lucide="shopping-cart" class="mr-2"></i> Add to Cart
+                                       </button>
+                                       <p class="text-sm text-gray-500 mt-3 text-center">Real-time inventory: ${product.stock > 0 ? `${product.stock} available` : 'Out of Stock (AI demand forecasting placeholder)'}</p>
+                                   </div>
+                               </div>
+                               <div class="mt-16">
+                                   <h2 class="text-2xl font-semibold text-gray-800 mb-6">Customer Reviews</h2>
+                                   <div class="space-y-6">
+                                       ${[1,2].map(i => `
+                                       <div class="border border-gray-200 p-6 rounded-lg">
+                                           <div class="flex items-center mb-2">
+                                               <div class="flex text-yellow-400">${[...Array(5)].map((_,j) => `<i data-lucide="star" class="${j < (5-i%2) ? 'fill-current':''}"></i>`).join('')}</div>
+                                               <h3 class="ml-3 font-semibold text-gray-800">Reviewer ${i}</h3>
+                                           </div>
+                                           <p class="text-gray-600">This is a placeholder review. Great product, highly recommended!</p>
+                                       </div>`).join('')}
+                                       <button class="text-blue-600 hover:underline">Load more reviews</button>
+                                   </div>
+                               </div>
+                           </div>
+                       </section>
+                   `;
+                   document.getElementById('addToCartBtnDetail').addEventListener('click', () => addToCart(product.id, product.name, product.price, product.imageUrl));
+               } else {
+                   mainContentArea.innerHTML = `<div class="text-center p-12"><h1 class="text-3xl font-bold">Product Not Found</h1><p class="mt-4">This product does not exist or has been removed.</p> <a href="#store" class="mt-6 inline-block bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors">Back to Store</a></div>`;
+               }
+           } catch (error) {
+               console.error("Error fetching product details:", error);
+               mainContentArea.innerHTML = `<div class="text-center p-12"><h1 class="text-3xl font-bold text-red-600">Error Loading Product</h1><p class="mt-4">We couldn't load the product details. Please try again later.</p> <a href="#store" class="mt-6 inline-block bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors">Back to Store</a></div>`;
+           } finally {
+               hideLoading();
+               lucide.createIcons();
+           }
+       }
+
+       // SERVICES PAGE
+       async function renderServicesPage() {
+           mainContentArea.innerHTML = `
+               <section class="py-12 bg-gray-50">
+                   <div class="container mx-auto px-6">
+                       <h1 class="text-4xl font-bold text-gray-800 mb-10 text-center">Our Contracting Services</h1>
+                       <div class="space-y-12">
+                           <div class="p-8 bg-white rounded-xl shadow-lg flex flex-col md:flex-row items-center gap-8">
+                               <img src="https://placehold.co/400x300/e0f2fe/0c4a6e?text=Residential+Project" alt="Residential Contracting" class="w-full md:w-1/3 h-auto rounded-lg object-cover">
+                               <div class="flex-1">
+                                   <h2 class="text-2xl font-semibold text-gray-800 mb-3">Residential Contracting</h2>
+                                   <p class="text-gray-700 mb-4">Building your dream home or renovating your existing space? We offer comprehensive residential contracting services, from initial design to final touches. Our team ensures quality, efficiency, and a stress-free experience.</p>
+                                   <ul class="list-disc list-inside text-gray-600 space-y-1 mb-4">
+                                       <li>New Home Construction</li>
+                                       <li>Home Renovations & Additions</li>
+                                       <li>Kitchen & Bathroom Remodeling</li>
+                                       <li>Custom Carpentry & Finishing</li>
+                                   </ul>
+                                   <button class="ai-estimator-btn bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors">Get AI Estimate for Residential</button>
+                               </div>
+                           </div>
+                           <div class="p-8 bg-white rounded-xl shadow-lg flex flex-col md:flex-row items-center gap-8">
+                               <img src="https://placehold.co/400x300/d1fae5/065f46?text=Commercial+Build" alt="Commercial Contracting" class="w-full md:w-1/3 h-auto rounded-lg object-cover">
+                               <div class="flex-1">
+                                   <h2 class="text-2xl font-semibold text-gray-800 mb-3">Commercial Contracting</h2>
+                                   <p class="text-gray-700 mb-4">Sterling Contractors provides reliable and professional commercial contracting solutions for businesses in Kampala. We handle projects of all sizes, ensuring minimal disruption and maximum value.</p>
+                                   <ul class="list-disc list-inside text-gray-600 space-y-1 mb-4">
+                                       <li>Office Fit-outs & Renovations</li>
+                                       <li>Retail Space Construction</li>
+                                       <li>Warehouse & Industrial Builds</li>
+                                       <li>Project Management</li>
+                                   </ul>
+                                   <button class="ai-estimator-btn bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors">Get AI Estimate for Commercial</button>
+                               </div>
+                           </div>
+                       </div>
+                   </div>
+               </section>
+
+               <section class="py-16">
+                   <div class="container mx-auto px-6">
+                       <h2 class="text-3xl font-bold text-gray-800 mb-8 text-center">Our Project Process & Your Peace of Mind</h2>
+                       <div class="max-w-3xl mx-auto text-gray-700 space-y-6">
+                           <p>We follow a transparent, step-by-step process for all contracting projects, integrating our deposit model to ensure smooth execution:</p>
+                           <ol class="list-decimal list-inside space-y-3 pl-4">
+                               <li><strong>Consultation & Quoting:</strong> We discuss your needs and provide a detailed quote (use our AI Estimator for a preliminary idea!).</li>
+                               <li><strong>Deposit & Agreement:</strong> Secure your project with an initial deposit. This helps us procure materials and schedule resources. <a href="#deposit" class="text-blue-600 hover:underline">Learn more about our deposit terms.</a></li>
+                               <li><strong>Planning & Design:</strong> Detailed planning and design approvals.</li>
+                               <li><strong>Execution:</strong> Our skilled team brings your project to life.</li>
+                               <li><strong>Milestone Payments:</strong> Further payments are tied to project milestones.</li>
+                               <li><strong>Completion & Handover:</strong> Final inspection and project handover.</li>
+                           </ol>
+                           <p class="mt-4">Our deposit model is designed for client benefit, ensuring resource availability and project commitment. We adhere to all Ugandan legal requirements for transparency and security.</p>
+                       </div>
+                   </div>
+               </section>
+
+               <section class="py-16 bg-gray-50">
+                   <div class="container mx-auto px-6">
+                       <h2 class="text-3xl font-bold text-gray-800 mb-10 text-center">Our Work in Kampala</h2>
+                       <div id="portfolioGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
+                           </div>
+                   </div>
+               </section>
+
+               <section class="py-16">
+                   <div class="container mx-auto px-6">
+                       <h2 class="text-3xl font-bold text-gray-800 mb-10 text-center">What Our Clients Say</h2>
+                       <div id="testimonialsContainer" class="grid md:grid-cols-2 gap-8">
+                           </div>
+                   </div>
+               </section>
+           `;
+           loadPortfolioItems();
+           loadTestimonials();
+           document.querySelectorAll('.ai-estimator-btn').forEach(btn => {
+               btn.addEventListener('click', () => openAiEstimatorModal());
+           });
+           lucide.createIcons();
+       }
+
+       // DEPOSIT MODEL PAGE
+       function renderDepositModelPage() {
+           mainContentArea.innerHTML = `
+               <section class="py-12 bg-white">
+                   <div class="container mx-auto px-6">
+                       <h1 class="text-4xl font-bold text-gray-800 mb-8 text-center">Understanding Our Deposit Model</h1>
+                       <div class="max-w-3xl mx-auto bg-gray-50 p-8 rounded-lg shadow-lg">
+                           <p class="text-gray-700 text-lg mb-6">At Sterling Contractors, we utilize a deposit-based capital model to ensure the successful and timely completion of your hardware supply and contracting projects. This approach is designed with transparency and client benefit at its core.</p>
+                           
+                           <div class="space-y-6">
+                               <div>
+                                   <h2 class="text-2xl font-semibold text-blue-700 mb-2 flex items-center"><i data-lucide="dollar-sign" class="mr-3"></i>Purpose of the Deposit</h2>
+                                   <p class="text-gray-600">The initial deposit serves several key purposes:</p>
+                                   <ul class="list-disc list-inside text-gray-600 pl-4 mt-2 space-y-1">
+                                       <li>Securing high-quality materials at current market prices.</li>
+                                       <li>Allocating skilled labor and specialized equipment for your project.</li>
+                                       <li>Confirming your project in our schedule, allowing for efficient planning.</li>
+                                       <li>Covering initial administrative and logistical costs.</li>
+                                   </ul>
+                               </div>
+
+                               <div>
+                                   <h2 class="text-2xl font-semibold text-blue-700 mb-2 flex items-center"><i data-lucide="percent" class="mr-3"></i>Deposit Percentage & Timing</h2>
+                                   <p class="text-gray-600">The deposit percentage typically ranges from <strong>30% to 50%</strong> of the total project or order value, depending on the scope and nature of the work or goods. This will be clearly outlined in your quotation and contract. The deposit is usually required upon signing the contract or confirming the order to initiate the process.</p>
+                               </div>
+
+                               <div>
+                                   <h2 class="text-2xl font-semibold text-blue-700 mb-2 flex items-center"><i data-lucide="refresh-cw" class="mr-3"></i>Refund Policies</h2>
+                                   <p class="text-gray-600">Our refund policies are fair and transparent. In the event of a project cancellation, the refundable amount of the deposit will depend on the stage of the project and any costs already incurred by Sterling Contractors (e.g., materials purchased, labor scheduled). Specific terms will be detailed in your contract.</p>
+                               </div>
+                               
+                               <div>
+                                   <h2 class="text-2xl font-semibold text-blue-700 mb-2 flex items-center"><i data-lucide="shield-check" class="mr-3"></i>Client Benefits & Trust</h2>
+                                   <p class="text-gray-600">This model allows us to:</p>
+                                   <ul class="list-disc list-inside text-gray-600 pl-4 mt-2 space-y-1">
+                                       <li>Operate efficiently and reduce project delays.</li>
+                                       <li>Offer competitive pricing by securing resources effectively.</li>
+                                       <li>Build a relationship based on mutual commitment and trust.</li>
+                                   </ul>
+                               </div>
+
+                               <div>
+                                   <h2 class="text-2xl font-semibold text-blue-700 mb-2 flex items-center"><i data-lucide="gavel" class="mr-3"></i>Ugandan Legal Disclaimers & Compliance</h2>
+                                   <p class="text-gray-600">Sterling Contractors operates in full compliance with Ugandan commercial laws and consumer protection regulations. All deposit agreements are documented in legally sound contracts, clearly stating terms, conditions, deliverables, and dispute resolution mechanisms. We are committed to ethical business practices.</p>
+                               </div>
+                           </div>
+                           <p class="text-gray-700 mt-8 text-sm">If you have any questions about our deposit model, please don't hesitate to <a href="#contact" class="text-blue-600 hover:underline">contact us</a>. We are happy to provide further clarification.</p>
+                       </div>
+                   </div>
+               </section>
+           `;
+           lucide.createIcons();
+       }
+
+       // BLOG PAGE
+       async function renderBlogPage() {
+           mainContentArea.innerHTML = `
+               <section class="py-12 bg-gray-50">
+                   <div class="container mx-auto px-6">
+                       <h1 class="text-4xl font-bold text-gray-800 mb-10 text-center">Sterling Insights Blog</h1>
+                       <div id="blogPostsGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                           </div>
+                       <div id="blogLoading" class="text-center py-8 hidden">Loading posts...</div>
+                       <div id="noBlogPostsMessage" class="text-center py-8 hidden">No blog posts yet. Check back soon!</div>
+                   </div>
+               </section>
+               <section class="py-8 text-center bg-white">
+                   <p class="text-gray-600 italic">Our blog features AI-assisted content generation for relevant, up-to-date articles on hardware and contracting in Uganda.</p>
+               </section>
+           `;
+           loadBlogPosts();
+           lucide.createIcons();
+       }
+
+       // BLOG DETAIL PAGE
+       async function renderBlogDetailPage(params) {
+           if (!params.id) {
+               navigateTo('blog');
+               return;
+           }
+           showLoading();
+           try {
+               const postRef = doc(db, blogPostsCollectionPath, params.id);
+               const postSnap = await getDoc(postRef);
+
+               if (postSnap.exists()) {
+                   const post = { id: postSnap.id, ...postSnap.data() };
+                   const postDate = post.createdAt && post.createdAt.toDate ? post.createdAt.toDate().toLocaleDateString() : 'N/A';
+                   mainContentArea.innerHTML = `
+                       <section class="py-12 bg-white">
+                           <div class="container mx-auto px-6 max-w-3xl">
+                               <button onclick="navigateTo('blog')" class="mb-6 text-blue-600 hover:underline flex items-center">
+                                   <i data-lucide="arrow-left" class="mr-2 h-5 w-5"></i> Back to Blog
+                               </button>
+                               <h1 class="text-4xl font-bold text-gray-800 mb-3">${post.title}</h1>
+                               <p class="text-gray-500 text-sm mb-6">By ${post.author || 'Sterling Team'} on ${postDate}</p>
+                               <img src="${post.imageUrl || 'https://placehold.co/800x400/e2e8f0/334155?text=Blog+Image'}" alt="${post.title}" class="rounded-lg shadow-lg w-full object-cover mb-8 max-h-96">
+                               
+                               <div class="prose prose-lg max-w-none text-gray-700 leading-relaxed">
+                                   ${post.content || '<p>Content not available.</p>'}
+                               </div>
+
+                               <div class="mt-10 pt-6 border-t border-gray-200">
+                                   <h3 class="text-lg font-semibold text-gray-800 mb-3">Share this post:</h3>
+                                   <div class="flex space-x-3">
+                                       <a href="#" class="text-blue-600 hover:text-blue-800"><i data-lucide="facebook" class="h-6 w-6"></i></a>
+                                       <a href="#" class="text-blue-400 hover:text-blue-600"><i data-lucide="twitter" class="h-6 w-6"></i></a>
+                                       <a href="#" class="text-red-600 hover:text-red-800"><i data-lucide="linkedin" class="h-6 w-6"></i></a>
+                                   </div>
+                               </div>
+                           </div>
+                       </section>
+                   `;
+               } else {
+                    mainContentArea.innerHTML = `<div class="text-center p-12"><h1 class="text-3xl font-bold">Post Not Found</h1><p class="mt-4">This blog post does not exist or has been removed.</p> <a href="#blog" class="mt-6 inline-block bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors">Back to Blog</a></div>`;
+               }
+
+           } catch (error) {
+               console.error("Error fetching blog post:", error);
+               mainContentArea.innerHTML = `<div class="text-center p-12"><h1 class="text-3xl font-bold text-red-600">Error Loading Post</h1><p class="mt-4">We couldn't load the blog post. Please try again later.</p> <a href="#blog" class="mt-6 inline-block bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors">Back to Blog</a></div>`;
+           } finally {
+               hideLoading();
+               lucide.createIcons();
+           }
+       }
+
+       // CONTACT PAGE
+       function renderContactPage() {
+           mainContentArea.innerHTML = `
+               <section class="py-12 bg-gray-50">
+                   <div class="container mx-auto px-6">
+                       <h1 class="text-4xl font-bold text-gray-800 mb-10 text-center">Get In Touch</h1>
+                       <div class="grid md:grid-cols-2 gap-10 bg-white p-8 md:p-12 rounded-xl shadow-xl">
+                           <div>
+                               <h2 class="text-2xl font-semibold text-gray-800 mb-4">Contact Information</h2>
+                               <p class="text-gray-700 mb-3 flex items-center"><i data-lucide="map-pin" class="text-blue-600 mr-3 h-5 w-5"></i> Hardware Lane, Kampala, Uganda</p>
+                               <p class="text-gray-700 mb-3 flex items-center"><i data-lucide="phone" class="text-blue-600 mr-3 h-5 w-5"></i> +256 7XX XXX XXX (Hardware Store)</p>
+                               <p class="text-gray-700 mb-6 flex items-center"><i data-lucide="mail" class="text-blue-600 mr-3 h-5 w-5"></i> info@sterlingcontractors.ug</p>
+                               
+                               <h3 class="text-xl font-semibold text-gray-800 mb-3">Business Hours</h3>
+                               <p class="text-gray-700">Monday - Friday: 8:00 AM - 6:00 PM</p>
+                               <p class="text-gray-700">Saturday: 9:00 AM - 4:00 PM</p>
+                               <p class="text-gray-700 mb-6">Sunday: Closed</p>
+
+                               <h3 class="text-xl font-semibold text-gray-800 mb-3">Follow Us</h3>
+                               <div class="flex space-x-4">
+                                   <a href="#" class="text-blue-700 hover:text-blue-900"><i data-lucide="facebook" class="h-7 w-7"></i></a>
+                                   <a href="#" class="text-sky-500 hover:text-sky-700"><i data-lucide="twitter" class="h-7 w-7"></i></a>
+                                   <a href="#" class="text-pink-600 hover:text-pink-800"><i data-lucide="instagram" class="h-7 w-7"></i></a>
+                               </div>
+                           </div>
+                           <div>
+                               <h2 class="text-2xl font-semibold text-gray-800 mb-4">Send Us a Message</h2>
+                               <form id="contactForm" class="space-y-6">
+                                   <div>
+                                       <label for="name" class="block text-sm font-medium text-gray-700">Full Name</label>
+                                       <input type="text" name="name" id="name" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                                   </div>
+                                   <div>
+                                       <label for="email" class="block text-sm font-medium text-gray-700">Email Address</label>
+                                       <input type="email" name="email" id="email" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                                   </div>
+                                   <div>
+                                       <label for="subject" class="block text-sm font-medium text-gray-700">Subject</label>
+                                       <input type="text" name="subject" id="subject" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                                   </div>
+                                   <div>
+                                       <label for="message" class="block text-sm font-medium text-gray-700">Message</label>
+                                       <textarea id="message" name="message" rows="4" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"></textarea>
+                                   </div>
+                                   <div>
+                                       <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg transition-colors">Send Message</button>
+                                   </div>
+                               </form>
+                           </div>
+                       </div>
+                   </div>
+               </section>
+           `;
+           document.getElementById('contactForm').addEventListener('submit', (e) => {
+               e.preventDefault();
+               // Placeholder for form submission (e.g., using a backend service or mailto)
+               showToast("Message sent (simulation)! We'll get back to you soon.", "success");
+               e.target.reset();
+           });
+           lucide.createIcons();
+       }
+
+       // CART PAGE
+       function renderCartPage() {
+           mainContentArea.innerHTML = `
+               <section class="py-12 bg-gray-50">
+                   <div class="container mx-auto px-6">
+                       <h1 class="text-4xl font-bold text-gray-800 mb-10 text-center">Your Shopping Cart</h1>
+                       <div id="cartItemsContainer" class="bg-white p-6 rounded-lg shadow-md">
+                           </div>
+                       <div id="cartSummary" class="mt-8 bg-white p-6 rounded-lg shadow-md">
+                           <h2 class="text-2xl font-semibold mb-4">Order Summary</h2>
+                           <div class="flex justify-between mb-2">
+                               <span>Subtotal</span>
+                               <span id="cartSubtotal">UGX 0</span>
+                           </div>
+                           <div class="flex justify-between mb-2">
+                               <span>Shipping (Placeholder)</span>
+                               <span>UGX 10,000</span>
+                           </div>
+                           <hr class="my-2">
+                           <div class="flex justify-between font-bold text-xl mb-6">
+                               <span>Total</span>
+                               <span id="cartTotal">UGX 10,000</span>
+                           </div>
+                           <button id="checkoutButton" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg transition-colors">
+                               Proceed to Checkout (Secure Payments)
+                           </button>
+                           <p class="text-xs text-gray-500 mt-2 text-center">Supports Credit Cards & Ugandan Mobile Money (MTN, Airtel) - Placeholder</p>
+                       </div>
+                       <div id="emptyCartMessage" class="text-center py-12 hidden">
+                           <i data-lucide="shopping-cart" class="h-16 w-16 text-gray-400 mx-auto mb-4"></i>
+                           <p class="text-xl text-gray-600">Your cart is empty.</p>
+                           <a href="#store" class="mt-6 inline-block bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors">Continue Shopping</a>
+                       </div>
+                   </div>
+               </section>
+           `;
+           renderCartItems(Object.values(localCart)); // Render from local cache initially
+           fetchCart(); // Then ensure it's up-to-date from Firestore
+           document.getElementById('checkoutButton').addEventListener('click', () => {
+               // Placeholder for checkout process
+               showToast("Checkout process initiated (simulation).", "info");
+               // This would typically redirect to a payment gateway or a more detailed checkout flow.
+           });
+           lucide.createIcons();
+       }
+
+       function renderCartItems(items) {
+           const container = document.getElementById('cartItemsContainer');
+           const summarySubtotal = document.getElementById('cartSubtotal');
+           const summaryTotal = document.getElementById('cartTotal');
+           const checkoutButton = document.getElementById('checkoutButton');
+           const emptyCartMessage = document.getElementById('emptyCartMessage');
+           const cartSummarySection = document.getElementById('cartSummary');
+
+
+           if (!container) return; // If cart page isn't active
+
+           if (items.length === 0) {
+               container.innerHTML = '';
+               if(emptyCartMessage) emptyCartMessage.classList.remove('hidden');
+               if(cartSummarySection) cartSummarySection.classList.add('hidden');
+               if(checkoutButton) checkoutButton.disabled = true;
+               updateCartCount(0);
+               return;
+           }
+           
+           if(emptyCartMessage) emptyCartMessage.classList.add('hidden');
+           if(cartSummarySection) cartSummarySection.classList.remove('hidden');
+           if(checkoutButton) checkoutButton.disabled = false;
+
+           let subtotal = 0;
+           container.innerHTML = items.map(item => {
+               const itemTotal = item.price * item.quantity;
+               subtotal += itemTotal;
+               return `
+                   <div class="flex items-center justify-between py-4 border-b border-gray-200 cart-item" data-id="${item.id}">
+                       <div class="flex items-center">
+                           <img src="${item.imageUrl || 'https://placehold.co/80x80/e2e8f0/334155?text=Item'}" alt="${item.productName}" class="w-16 h-16 object-cover rounded mr-4">
+                           <div>
+                               <h3 class="font-semibold text-gray-800">${item.productName}</h3>
+                               <p class="text-sm text-gray-500">UGX ${item.price.toLocaleString()}</p>
+                           </div>
+                       </div>
+                       <div class="flex items-center">
+                           <button class="quantity-change px-2 py-1 border rounded-l" data-action="decrease" data-id="${item.id}">-</button>
+                           <input type="number" value="${item.quantity}" min="1" class="w-12 text-center border-t border-b quantity-input" data-id="${item.id}" readonly>
+                           <button class="quantity-change px-2 py-1 border rounded-r" data-action="increase" data-id="${item.id}">+</button>
+                           <span class="ml-4 w-24 text-right font-semibold">UGX ${(itemTotal).toLocaleString()}</span>
+                           <button class="remove-item ml-4 text-red-500 hover:text-red-700" data-id="${item.id}"><i data-lucide="trash-2" class="h-5 w-5"></i></button>
+                       </div>
+                   </div>
+               `;
+           }).join('');
+
+           const shipping = 10000; // Placeholder
+           if (summarySubtotal) summarySubtotal.textContent = `UGX ${subtotal.toLocaleString()}`;
+           if (summaryTotal) summaryTotal.textContent = `UGX ${(subtotal + shipping).toLocaleString()}`;
+           
+           lucide.createIcons(); // Re-render icons for new elements
+
+           // Add event listeners for quantity changes and removal
+           document.querySelectorAll('.quantity-change').forEach(button => {
+               button.addEventListener('click', handleQuantityChange);
+           });
+           document.querySelectorAll('.remove-item').forEach(button => {
+               button.addEventListener('click', handleRemoveItem);
+           });
+       }
+
+       async function handleQuantityChange(event) {
+           const productId = event.currentTarget.dataset.id;
+           const action = event.currentTarget.dataset.action;
+           const item = localCart[productId];
+
+           if (!item || !currentUser) return;
+
+           let newQuantity = item.quantity;
+           if (action === 'increase') {
+               newQuantity++;
+           } else if (action === 'decrease') {
+               newQuantity = Math.max(1, newQuantity - 1); // Quantity cannot be less than 1
+           }
+           
+           showLoading();
+           try {
+               const productInCartRef = doc(db, cartCollectionPath(currentUserId), productId);
+               await setDoc(productInCartRef, { quantity: newQuantity }, { merge: true });
+               // Firestore onSnapshot will update the UI via fetchCart -> renderCartItems
+           } catch (error) {
+               console.error("Error updating quantity:", error);
+               showToast("Failed to update item quantity.", "error");
+           } finally {
+               hideLoading();
+           }
+       }
+
+       async function handleRemoveItem(event) {
+           const productId = event.currentTarget.dataset.id;
+           if (!localCart[productId] || !currentUser) return;
+
+           if (confirm(`Are you sure you want to remove ${localCart[productId].productName} from your cart?`)) {
+               showLoading();
+               try {
+                   const productInCartRef = doc(db, cartCollectionPath(currentUserId), productId);
+                   await deleteDoc(productInCartRef);
+                   showToast(`${localCart[productId].productName} removed from cart.`, "success");
+                   // Firestore onSnapshot will update the UI
+               } catch (error) {
+                   console.error("Error removing item:", error);
+                   showToast("Failed to remove item from cart.", "error");
+               } finally {
+                   hideLoading();
+               }
+           }
+       }
+
+
+       // --- Data Loading Functions (Firestore) ---
+       async function loadFeaturedProducts() {
+           const grid = document.getElementById('featuredProductsGrid');
+           if (!grid) return;
+           grid.innerHTML = '<p class="col-span-full text-center">Loading featured products...</p>'; // Loading state
+           try {
+               const q = query(collection(db, productsCollectionPath), where("featured", "==", true), limit(4));
+               const snapshot = await getDocs(q);
+               if (snapshot.empty) {
+                   grid.innerHTML = '<p class="col-span-full text-center">No featured products available right now.</p>';
+                   return;
+               }
+               grid.innerHTML = snapshot.docs.map(doc => productCardHTML({id: doc.id, ...doc.data()})).join('');
+               lucide.createIcons();
+               addEventListenersToProductCards();
+           } catch (error) {
+               console.error("Error loading featured products:", error);
+               grid.innerHTML = '<p class="col-span-full text-center text-red-500">Could not load featured products.</p>';
+           }
+       }
+       
+       async function loadAllProducts(searchTerm = '', category = '') {
+           const grid = document.getElementById('productsGrid');
+           const storeLoading = document.getElementById('storeLoading');
+           const noProductsMessage = document.getElementById('noProductsMessage');
+           const categoryFilterSelect = document.getElementById('categoryFilter');
+
+           if (!grid || !storeLoading || !noProductsMessage) return;
+
+           storeLoading.classList.remove('hidden');
+           grid.innerHTML = '';
+           noProductsMessage.classList.add('hidden');
+
+           try {
+               let productsQuery = collection(db, productsCollectionPath);
+               // Firestore doesn't support case-insensitive search or partial string matches directly in queries for multiple fields easily.
+               // For a real app, use a search service like Algolia or Typesense, or structure data for Firestore search (e.g., keywords array).
+               // This is a simplified filter.
+               // const q = query(productsQuery, orderBy("name")); // Basic query
+               
+               // For filtering, usually you'd fetch all and filter client-side for small datasets, or use more complex queries/search service.
+               const snapshot = await getDocs(productsQuery);
+               let products = snapshot.docs.map(doc => ({id: doc.id, ...doc.data()}));
+
+               // Populate categories for filter dropdown
+               if (categoryFilterSelect && categoryFilterSelect.options.length <=1 ) { // Only populate once
+                   const categories = [...new Set(products.map(p => p.category))].filter(Boolean);
+                   categories.sort().forEach(cat => {
+                       const option = document.createElement('option');
+                       option.value = cat;
+                       option.textContent = cat;
+                       categoryFilterSelect.appendChild(option);
+                   });
+               }
+               
+               // Client-side filtering (simple version)
+               if (searchTerm) {
+                   const lowerSearchTerm = searchTerm.toLowerCase();
+                   products = products.filter(p => p.name.toLowerCase().includes(lowerSearchTerm) || (p.description && p.description.toLowerCase().includes(lowerSearchTerm)));
+               }
+               if (category) {
+                   products = products.filter(p => p.category === category);
+               }
+
+               if (products.length === 0) {
+                   noProductsMessage.classList.remove('hidden');
+               } else {
+                   grid.innerHTML = products.map(product => productCardHTML(product)).join('');
+                   lucide.createIcons();
+                   addEventListenersToProductCards();
+               }
+           } catch (error) {
+               console.error("Error loading all products:", error);
+               grid.innerHTML = '<p class="col-span-full text-center text-red-500">Could not load products. Please try again.</p>';
+           } finally {
+               storeLoading.classList.add('hidden');
+           }
+       }
+
+       async function loadBlogPosts() {
+           const grid = document.getElementById('blogPostsGrid');
+           const blogLoading = document.getElementById('blogLoading');
+           const noBlogPostsMessage = document.getElementById('noBlogPostsMessage');
+           if (!grid || !blogLoading || !noBlogPostsMessage) return;
+
+           blogLoading.classList.remove('hidden');
+           grid.innerHTML = '';
+           noBlogPostsMessage.classList.add('hidden');
+
+           try {
+               // const q = query(collection(db, blogPostsCollectionPath), orderBy("createdAt", "desc")); // Requires index
+               const q = query(collection(db, blogPostsCollectionPath)); // Simpler query
+               const snapshot = await getDocs(q);
+               // Sort client-side if not using orderBy or if complex sorting is needed
+               const posts = snapshot.docs
+                   .map(doc => ({ id: doc.id, ...doc.data() }))
+                   .sort((a, b) => (b.createdAt?.toDate() || 0) - (a.createdAt?.toDate() || 0));
+
+
+               if (posts.length === 0) {
+                   noBlogPostsMessage.classList.remove('hidden');
+               } else {
+                   grid.innerHTML = posts.map(post => blogCardHTML(post)).join('');
+                   lucide.createIcons();
+                   addEventListenersToBlogCards();
+               }
+           } catch (error) {
+               console.error("Error loading blog posts:", error);
+               grid.innerHTML = '<p class="col-span-full text-center text-red-500">Could not load blog posts.</p>';
+           } finally {
+               blogLoading.classList.add('hidden');
+           }
+       }
+
+       async function loadPortfolioItems() {
+           const grid = document.getElementById('portfolioGrid');
+           if (!grid) return;
+           grid.innerHTML = '<p class="col-span-full text-center">Loading portfolio...</p>';
+           try {
+               const q = query(collection(db, portfolioCollectionPath));
+               const snapshot = await getDocs(q);
+               if (snapshot.empty) {
+                   grid.innerHTML = '<p class="col-span-full text-center">No portfolio items to display yet.</p>';
+                   return;
+               }
+               grid.innerHTML = snapshot.docs.map(doc => portfolioItemHTML({id: doc.id, ...doc.data()})).join('');
+               lucide.createIcons();
+           } catch (error) {
+               console.error("Error loading portfolio:", error);
+               grid.innerHTML = '<p class="col-span-full text-center text-red-500">Could not load portfolio.</p>';
+           }
+       }
+       
+       async function loadTestimonials() {
+           const container = document.getElementById('testimonialsContainer');
+           if (!container) return;
+           container.innerHTML = '<p class="col-span-full text-center">Loading testimonials...</p>';
+           try {
+               const q = query(collection(db, testimonialsCollectionPath));
+               const snapshot = await getDocs(q);
+               if (snapshot.empty) {
+                   container.innerHTML = '<p class="col-span-full text-center">No testimonials yet. Be the first to review!</p>';
+                   return;
+               }
+               container.innerHTML = snapshot.docs.map(doc => testimonialHTML({id: doc.id, ...doc.data()})).join('');
+               lucide.createIcons();
+           } catch (error) {
+               console.error("Error loading testimonials:", error);
+               container.innerHTML = '<p class="col-span-full text-center text-red-500">Could not load testimonials.</p>';
+           }
+       }
+
+       // --- HTML Card Generators ---
+       function productCardHTML(product) {
+           return `
+               <div class="product-card bg-white rounded-xl shadow-lg overflow-hidden transition-all hover:shadow-2xl transform hover:-translate-y-1 flex flex-col" data-id="${product.id}">
+                   <a href="#productDetail/${product.id}" class="block">
+                       <img src="${product.imageUrl || 'https://placehold.co/300x200/e2e8f0/334155?text=Product'}" alt="${product.name}" class="w-full h-48 object-cover">
+                   </a>
+                   <div class="p-5 flex flex-col flex-grow">
+                       <h3 class="text-xl font-semibold text-gray-800 mb-2 truncate">
+                           <a href="#productDetail/${product.id}" class="hover:text-blue-600">${product.name}</a>
+                       </h3>
+                       <p class="text-gray-600 text-sm mb-3 flex-grow">${(product.description || '').substring(0,60)}...</p>
+                       <div class="flex items-center mb-3">
+                           <span class="text-2xl font-bold text-blue-600">UGX ${product.price.toLocaleString()}</span>
+                           ${product.oldPrice ? `<span class="ml-2 text-sm text-gray-500 line-through">UGX ${product.oldPrice.toLocaleString()}</span>` : ''}
+                       </div>
+                       <div class="flex items-center text-sm text-gray-500 mb-4">
+                           <i data-lucide="star" class="h-4 w-4 text-yellow-400 fill-current mr-1"></i>
+                           <span>${product.rating || '4.5'} (${product.reviewsCount || (Math.floor(Math.random()*50)+5)})</span>
+                       </div>
+                       <button class="add-to-cart-btn mt-auto w-full bg-gray-800 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors flex items-center justify-center"
+                               data-id="${product.id}" data-name="${product.name}" data-price="${product.price}" data-image="${product.imageUrl || ''}">
+                           <i data-lucide="shopping-cart" class="mr-2 h-5 w-5"></i> Add to Cart
+                       </button>
+                   </div>
+               </div>
+           `;
+       }
+       
+       function blogCardHTML(post) {
+           const postDate = post.createdAt && post.createdAt.toDate ? post.createdAt.toDate().toLocaleDateString() : 'N/A';
+           return `
+               <div class="blog-card bg-white rounded-xl shadow-lg overflow-hidden transition-all hover:shadow-2xl transform hover:-translate-y-1 flex flex-col" data-id="${post.id}">
+                   <a href="#blogDetail/${post.id}" class="block">
+                       <img src="${post.imageUrl || 'https://placehold.co/400x250/e2e8f0/334155?text=Blog+Post'}" alt="${post.title}" class="w-full h-56 object-cover">
+                   </a>
+                   <div class="p-6 flex flex-col flex-grow">
+                       <p class="text-sm text-blue-600 font-semibold mb-1">${post.category || 'General'}</p>
+                       <h3 class="text-xl font-semibold text-gray-800 mb-3 flex-grow">
+                           <a href="#blogDetail/${post.id}" class="hover:text-blue-700">${post.title}</a>
+                       </h3>
+                       <p class="text-gray-600 text-sm mb-4">${(post.summary || post.content.substring(0,100) + '...' || '')}</p>
+                       <div class="mt-auto text-xs text-gray-500">
+                           <span>By ${post.author || 'Sterling Team'}</span> | <span>${postDate}</span>
+                       </div>
+                   </div>
+               </div>
+           `;
+       }
+
+       function portfolioItemHTML(item) {
+           return `
+               <div class="bg-white rounded-lg shadow-md overflow-hidden group">
+                   <img src="${item.imageUrl || 'https://placehold.co/400x300/dbeafe/1e40af?text=Project'}" alt="${item.title}" class="w-full h-56 object-cover group-hover:scale-105 transition-transform duration-300">
+                   <div class="p-5">
+                       <h3 class="text-xl font-semibold text-gray-800 mb-2">${item.title}</h3>
+                       <p class="text-gray-600 text-sm">${item.description || 'A showcase of our quality work.'}</p>
+                       ${item.location ? `<p class="text-xs text-gray-500 mt-2"><i data-lucide="map-pin" class="inline h-3 w-3 mr-1"></i>${item.location}</p>` : ''}
+                   </div>
+               </div>
+           `;
+       }
+
+       function testimonialHTML(testimonial) {
+           return `
+               <div class="bg-blue-50 p-6 rounded-lg shadow-sm border border-blue-200">
+                   <div class="flex items-center mb-4">
+                       <img src="${testimonial.clientImage || 'https://placehold.co/60x60/bfdbfe/1d4ed8?text=Client'}" alt="${testimonial.clientName}" class="w-12 h-12 rounded-full mr-4 object-cover">
+                       <div>
+                           <h4 class="font-semibold text-gray-800">${testimonial.clientName}</h4>
+                           <p class="text-sm text-gray-600">${testimonial.projectType || 'Valued Client'}</p>
+                       </div>
+                   </div>
+                   <p class="text-gray-700 italic">"${testimonial.quote}"</p>
+                   ${testimonial.videoUrl ? `<a href="${testimonial.videoUrl}" target="_blank" class="mt-3 inline-block text-blue-600 hover:underline">Watch Video Testimonial <i data-lucide="play-circle" class="inline h-4 w-4"></i></a>` : ''}
+               </div>
+           `;
+       }
+
+       function addEventListenersToProductCards() {
+           document.querySelectorAll('.add-to-cart-btn').forEach(button => {
+               button.addEventListener('click', (event) => {
+                   event.stopPropagation(); // Prevent navigation if card itself is a link
+                   const { id, name, price, image } = event.currentTarget.dataset;
+                   addToCart(id, name, parseFloat(price), image);
+               });
+           });
+            document.querySelectorAll('.product-card a, .product-card h3 a').forEach(link => {
+               link.addEventListener('click', (event) => {
+                   event.preventDefault(); // Prevent default link behavior
+                   const productId = link.closest('.product-card').dataset.id;
+                   navigateTo('productDetail', { id: productId });
+               });
+           });
+       }
+       
+       function addEventListenersToBlogCards() {
+           document.querySelectorAll('.blog-card a, .blog-card h3 a').forEach(link => {
+               link.addEventListener('click', (event) => {
+                   event.preventDefault();
+                   const postId = link.closest('.blog-card').dataset.id;
+                   navigateTo('blogDetail', { id: postId });
+               });
+           });
+       }
+
+       // --- Modals (Auth, AI Estimator) ---
+       const authModal = document.getElementById('authModal');
+       const authModalContent = document.getElementById('authModalContent');
+       const aiEstimatorModal = document.getElementById('aiEstimatorModal');
+
+       function openAuthModal(type = 'login') { // type can be 'login' or 'signup'
+           authModalContent.innerHTML = type === 'login' ? `
+               <h2 class="text-2xl font-bold mb-6 text-center text-gray-800">Login to Sterling Contractors</h2>
+               <form id="loginForm" class="space-y-4">
+                   <div>
+                       <label for="loginEmail" class="block text-sm font-medium text-gray-700">Email</label>
+                       <input type="email" id="loginEmail" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                   </div>
+                   <div>
+                       <label for="loginPassword" class="block text-sm font-medium text-gray-700">Password</label>
+                       <input type="password" id="loginPassword" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                   </div>
+                   <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition-colors">Login</button>
+               </form>
+               <button id="googleLoginBtnModal" class="mt-4 w-full bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg transition-colors flex items-center justify-center">
+                   <i data-lucide="chrome" class="mr-2"></i> Sign in with Google
+               </button>
+               <p class="mt-4 text-center text-sm">Don't have an account? <button onclick="openAuthModal('signup')" class="text-blue-600 hover:underline">Sign Up</button></p>
+           ` : `
+               <h2 class="text-2xl font-bold mb-6 text-center text-gray-800">Create Your Account</h2>
+               <form id="signupForm" class="space-y-4">
+                   <div>
+                       <label for="signupEmail" class="block text-sm font-medium text-gray-700">Email</label>
+                       <input type="email" id="signupEmail" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                   </div>
+                   <div>
+                       <label for="signupPassword" class="block text-sm font-medium text-gray-700">Password (min. 6 characters)</label>
+                       <input type="password" id="signupPassword" required minlength="6" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                   </div>
+                    <div>
+                       <label for="signupConfirmPassword" class="block text-sm font-medium text-gray-700">Confirm Password</label>
+                       <input type="password" id="signupConfirmPassword" required minlength="6" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                   </div>
+                   <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition-colors">Sign Up</button>
+               </form>
+                <button id="googleLoginBtnModalSignup" class="mt-4 w-full bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg transition-colors flex items-center justify-center">
+                   <i data-lucide="chrome" class="mr-2"></i> Sign up with Google
+               </button>
+               <p class="mt-4 text-center text-sm">Already have an account? <button onclick="openAuthModal('login')" class="text-blue-600 hover:underline">Login</button></p>
+           `;
+           authModal.classList.remove('hidden');
+           lucide.createIcons();
+
+           if (type === 'login') {
+               document.getElementById('loginForm').addEventListener('submit', (e) => {
+                   e.preventDefault();
+                   handleLogin(document.getElementById('loginEmail').value, document.getElementById('loginPassword').value);
+               });
+               document.getElementById('googleLoginBtnModal').addEventListener('click', handleGoogleLogin);
+           } else {
+               document.getElementById('signupForm').addEventListener('submit', (e) => {
+                   e.preventDefault();
+                   const email = document.getElementById('signupEmail').value;
+                   const password = document.getElementById('signupPassword').value;
+                   const confirmPassword = document.getElementById('signupConfirmPassword').value;
+                   if (password !== confirmPassword) {
+                       showToast("Passwords do not match!", "error");
+                       return;
+                   }
+                   handleSignup(email, password);
+               });
+                document.getElementById('googleLoginBtnModalSignup').addEventListener('click', handleGoogleLogin);
+           }
+       }
+
+       function closeAuthModal() {
+           authModal.classList.add('hidden');
+       }
+
+       function openAiEstimatorModal() {
+           aiEstimatorModal.classList.remove('hidden');
+           // Add form submission logic for AI estimator here
+           // This would likely involve collecting project details and sending to a (mocked) AI backend
+           document.getElementById('aiEstimatorForm').onsubmit = (e) => {
+               e.preventDefault();
+               showToast("AI Estimate submitted (simulation)! We'll analyze your request.", "info");
+               closeAiEstimatorModal();
+           };
+       }
+
+       function closeAiEstimatorModal() {
+           aiEstimatorModal.classList.add('hidden');
+       }
+       
+       // --- Initial Setup ---
+       function initializeApp() {
+           // Event Listeners for static elements
+           loginButtonNav.addEventListener('click', () => openAuthModal('login'));
+           signupButtonNav.addEventListener('click', () => openAuthModal('signup'));
+           logoutButtonNav.addEventListener('click', handleLogout);
+           
+           document.getElementById('closeAuthModalBtn').addEventListener('click', closeAuthModal);
+           document.getElementById('closeAiEstimatorModalBtn').addEventListener('click', closeAiEstimatorModal);
+           
+           // Mobile Menu Toggle
+           mobileMenuButton.addEventListener('click', () => {
+               mobileNavMenu.classList.toggle('hidden');
+           });
+
+           // Close mobile menu when a link is clicked
+           mobileNavMenu.querySelectorAll('a').forEach(link => {
+               link.addEventListener('click', () => mobileNavMenu.classList.add('hidden'));
+           });
+
+           // Handle Hash Navigation
+           window.addEventListener('hashchange', () => {
+               const hash = window.location.hash || '#home';
+               const [pageKey, id] = hash.substring(1).split('/');
+               navigateTo(pageKey, { id });
+           });
+           
+           // Initial Page Load
+           const initialHash = window.location.hash || '#home';
+           const [initialPageKey, initialId] = initialHash.substring(1).split('/');
+           // Auth state will trigger the first navigateTo call once ready.
+           // If not using onAuthStateChanged to trigger initial nav, call it here:
+           // navigateTo(initialPageKey, { id: initialId });
+
+           // AI Chatbot Placeholder
+           const aiChatbotButton = document.getElementById('aiChatbotButton');
+           aiChatbotButton.addEventListener('click', () => {
+               showToast("AI Chatbot coming soon! (Placeholder for OpenAI API integration)", "info");
+           });
+
+           // Add some mock data if Firestore is empty (for demo purposes)
+           // This should ideally be done via an admin panel or a setup script.
+           // addMockDataToFirestore(); 
+
+           lucide.createIcons(); // Initial icon rendering for static icons
+           console.log("Sterling Contractors App Initialized");
+       }
+       
+       // --- Mock Data Population (Optional - for demo) ---
+       async function addMockDataToFirestore() {
+           console.log("Checking/Adding mock data to Firestore...");
+           // Products
+           const mockProducts = [
+               { name: "Heavy Duty Cement Bags (50kg)", price: 28000, category: "Building Materials", imageUrl: "https://placehold.co/300x200/a5b4fc/1e3a8a?text=Cement", description: "High-quality cement for strong constructions.", featured: true, stock: 150, rating: 4.8, reviewsCount: 120, specs: {"Brand": "Simba", "Type": "Portland"} },
+               { name: "Steel Reinforcement Bars (12mm)", price: 45000, category: "Metals", imageUrl: "https://placehold.co/300x200/99f6e4/0d9488?text=Rebars", description: "Durable steel bars for structural support.", featured: true, stock: 300, rating: 4.7, reviewsCount: 95, specs: {"Grade": "High Tensile", "Length": "12m"} },
+               { name: "Quality Paint (20 Liters, White)", price: 180000, category: "Paints & Finishes", imageUrl: "https://placehold.co/300x200/fbcfe8/831843?text=Paint", description: "Premium quality paint for a lasting finish.", featured: false, stock: 80, rating: 4.5, reviewsCount: 60, specs: {"Color": "White", "Finish": "Matte"} },
+               { name: "Roofing Sheets (Corrugated Iron)", price: 35000, category: "Roofing", imageUrl: "https://placehold.co/300x200/fde68a/78350f?text=Roofing", description: "Weather-resistant roofing sheets.", featured: true, stock: 500, rating: 4.6, reviewsCount: 70, specs: {"Material": "Galvanized Iron", "Gauge": "28"} },
+               { name: "Wooden Doors (Mahogany)", price: 350000, category: "Doors & Windows", imageUrl: "https://placehold.co/300x200/d9f99d/3f6212?text=Door", description: "Elegant and sturdy mahogany wooden doors.", featured: false, stock: 30, rating: 4.9, reviewsCount: 45, specs: {"Wood": "Mahogany", "Size": "Standard"} },
+                { name: "LED Light Bulbs (Pack of 5)", price: 25000, category: "Electricals", imageUrl: "https://placehold.co/300x200/c4b5fd/4c1d95?text=LED+Bulbs", description: "Energy-efficient LED bulbs, bright white.", featured: true, stock: 200, rating: 4.4, reviewsCount: 88, specs: {"Wattage": "9W", "Lumen": "800lm"} },
+           ];
+           const productsCol = collection(db, productsCollectionPath);
+           const productsSnap = await getDocs(query(productsCol, limit(1)));
+           if (productsSnap.empty) {
+               console.log("Adding mock products...");
+               for (const product of mockProducts) {
+                   await addDoc(productsCol, product);
+               }
+           }
+
+           // Blog Posts
+           const mockBlogPosts = [
+               { title: "Top 5 Tips for Choosing Building Materials in Kampala", content: "<p>Kampala's unique climate and building landscape require careful consideration when selecting materials...</p><p>1. Durability against humidity...</p>", summary: "Learn how to select the best building materials for your Kampala project.", category: "Tips & Guides", author: "Sterling Experts", createdAt: new Date(2024, 4, 15), imageUrl: "https://placehold.co/400x250/fed7aa/7c2d12?text=Blog+Materials" },
+               { title: "Understanding the Sterling Deposit Model", content: "<p>Our deposit model is designed for transparency and efficiency, ensuring your project starts strong...</p>", summary: "A deep dive into how our deposit system benefits your construction projects.", category: "Company News", author: "M. Cedric", createdAt: new Date(2024, 5, 1), imageUrl: "https://placehold.co/400x250/a7f3d0/047857?text=Blog+Deposit" },
+           ];
+           const blogCol = collection(db, blogPostsCollectionPath);
+           const blogSnap = await getDocs(query(blogCol, limit(1)));
+           if (blogSnap.empty) {
+               console.log("Adding mock blog posts...");
+               for (const post of mockBlogPosts) {
+                   await addDoc(blogCol, post);
+               }
+           }
+           // Add more mock data for portfolio, testimonials as needed...
+           console.log("Mock data check complete.");
+       }
+
+
+       // --- Start the App ---
+       // Ensure DOM is fully loaded before initializing
+       if (document.readyState === 'loading') {
+           document.addEventListener('DOMContentLoaded', initializeApp);
+       } else {
+           initializeApp();
+       }
+
+       // Expose key functions to global scope if needed for inline event handlers (though better to attach via JS)
+       window.navigateTo = navigateTo;
+       window.openAuthModal = openAuthModal;
+       window.openAiEstimatorModal = openAiEstimatorModal;
+
+   </script>
+
+   <style>
+       body {
+           font-family: 'Inter', sans-serif;
+           scroll-behavior: smooth;
+       }
+       .animate-fade-in-down {
+           animation: fadeInDown 0.8s ease-out forwards;
+       }
+       .animate-fade-in-up {
+           animation: fadeInUp 0.8s ease-out forwards;
+       }
+       .delay-200 { animation-delay: 0.2s; }
+       .delay-400 { animation-delay: 0.4s; }
+       .delay-600 { animation-delay: 0.6s; }
+
+       @keyframes fadeInDown {
+           from { opacity: 0; transform: translateY(-20px); }
+           to { opacity: 1; transform: translateY(0); }
+       }
+       @keyframes fadeInUp {
+           from { opacity: 0; transform: translateY(20px); }
+           to { opacity: 1; transform: translateY(0); }
+       }
+       /* Custom scrollbar for a more Apple-like feel (optional) */
+       ::-webkit-scrollbar {
+           width: 8px;
+           height: 8px;
+       }
+       ::-webkit-scrollbar-track {
+           background: #f1f1f1;
+           border-radius: 10px;
+       }
+       ::-webkit-scrollbar-thumb {
+           background: #c1c1c1;
+           border-radius: 10px;
+       }
+       ::-webkit-scrollbar-thumb:hover {
+           background: #a1a1a1;
+       }
+       .prose img { /* Style images within blog content */
+           border-radius: 0.5rem; /* lg */
+           box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1); /* shadow-md */
+       }
+       .prose a {
+           color: #2563eb; /* blue-600 */
+           text-decoration: none;
+       }
+       .prose a:hover {
+           text-decoration: underline;
+       }
+       /* Hamburger menu transition */
+       #mobileNavMenu {
+           transition: transform 0.3s ease-in-out;
+       }
+       #mobileNavMenu.hidden {
+           transform: translateX(-100%);
+       }
+       /* Toast Notification */
+       #toastNotification {
+           transition: opacity 0.3s ease-in-out, transform 0.3s ease-in-out;
+       }
+   </style>
+</head>
+<body class="bg-gray-100 text-gray-800 antialiased">
+
+   <header class="bg-white shadow-md sticky top-0 z-50">
+       <div class="container mx-auto px-6 py-4 flex justify-between items-center">
+           <a href="#home" class="text-3xl font-extrabold text-blue-700">
+               Sterling<span class="text-gray-700">Contractors</span>
+           </a>
+           <nav class="hidden md:flex space-x-3 lg:space-x-5 items-center">
+               <a href="#home" class="text-gray-700 hover:text-blue-600 px-3 py-2 rounded-md text-sm font-medium transition-colors">Home</a>
+               <a href="#store" class="text-gray-700 hover:text-blue-600 px-3 py-2 rounded-md text-sm font-medium transition-colors">Hardware Store</a>
+               <a href="#services" class="text-gray-700 hover:text-blue-600 px-3 py-2 rounded-md text-sm font-medium transition-colors">Services</a>
+               <a href="#deposit" class="text-gray-700 hover:text-blue-600 px-3 py-2 rounded-md text-sm font-medium transition-colors">Deposit Model</a>
+               <a href="#blog" class="text-gray-700 hover:text-blue-600 px-3 py-2 rounded-md text-sm font-medium transition-colors">Blog</a>
+               <a href="#contact" class="text-gray-700 hover:text-blue-600 px-3 py-2 rounded-md text-sm font-medium transition-colors">Contact</a>
+               <a href="#cart" class="relative text-gray-700 hover:text-blue-600 px-3 py-2 rounded-md text-sm font-medium transition-colors">
+                   <i data-lucide="shopping-cart"></i>
+                   <span id="cartItemCount" class="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-4 w-4 flex items-center justify-center hidden">0</span>
+               </a>
+           </nav>
+           <div class="hidden md:flex items-center space-x-2">
+               <div id="authSection">
+                   <button id="loginButtonNav" class="text-sm font-medium text-blue-600 hover:text-blue-800 px-4 py-2 rounded-md transition-colors">Login</button>
+                   <button id="signupButtonNav" class="text-sm bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded-lg transition-colors">Sign Up</button>
+               </div>
+               <div id="userProfileSection" class="hidden items-center space-x-2">
+                   <span id="userNameDisplay" class="text-sm font-medium text-gray-700">User</span>
+                   <button id="logoutButtonNav" class="text-sm text-red-500 hover:text-red-700 px-3 py-2 rounded-md transition-colors"><i data-lucide="log-out" class="h-5 w-5"></i></button>
+               </div>
+           </div>
+           <div class="md:hidden">
+               <button id="mobileMenuButton" class="text-gray-700 hover:text-blue-600 focus:outline-none">
+                   <i data-lucide="menu" class="h-7 w-7"></i>
+               </button>
+           </div>
+       </div>
+       <div id="mobileNavMenu" class="md:hidden hidden bg-white shadow-lg absolute top-full left-0 w-full z-40 py-2">
+           <a href="#home" class="block px-6 py-3 text-gray-700 hover:bg-gray-100 hover:text-blue-600 transition-colors">Home</a>
+           <a href="#store" class="block px-6 py-3 text-gray-700 hover:bg-gray-100 hover:text-blue-600 transition-colors">Hardware Store</a>
+           <a href="#services" class="block px-6 py-3 text-gray-700 hover:bg-gray-100 hover:text-blue-600 transition-colors">Services</a>
+           <a href="#deposit" class="block px-6 py-3 text-gray-700 hover:bg-gray-100 hover:text-blue-600 transition-colors">Deposit Model</a>
+           <a href="#blog" class="block px-6 py-3 text-gray-700 hover:bg-gray-100 hover:text-blue-600 transition-colors">Blog</a>
+           <a href="#contact" class="block px-6 py-3 text-gray-700 hover:bg-gray-100 hover:text-blue-600 transition-colors">Contact</a>
+           <a href="#cart" class="block px-6 py-3 text-gray-700 hover:bg-gray-100 hover:text-blue-600 transition-colors relative">
+               Shopping Cart <span id="mobileCartItemCount" class="ml-2 bg-red-500 text-white text-xs rounded-full h-5 w-5 inline-flex items-center justify-center">0</span>
+           </a>
+           <div class="px-6 py-3 border-t border-gray-200">
+                <div id="authSectionMobile" class="auth-section-mobile">
+                   <button onclick="openAuthModal('login')" class="w-full text-left text-blue-600 hover:underline py-2">Login</button>
+                   <button onclick="openAuthModal('signup')" class="w-full mt-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded-lg transition-colors">Sign Up</button>
+               </div>
+               <div id="userProfileSectionMobile" class="user-profile-mobile hidden">
+                   <p id="userNameDisplayMobile" class="text-sm font-medium text-gray-700 mb-2">User</p>
+                   <button onclick="handleLogout()" class="w-full text-left text-red-500 hover:underline py-2">Logout</button>
+               </div>
+           </div>
+       </div>
+   </header>
+
+   <main id="mainContent" class="min-h-screen">
+       </main>
+
+   <footer class="bg-gray-800 text-gray-300 py-12">
+       <div class="container mx-auto px-6">
+           <div class="grid grid-cols-1 md:grid-cols-4 gap-8 mb-8">
+               <div>
+                   <h3 class="text-xl font-semibold text-white mb-4">Sterling Contractors</h3>
+                   <p class="text-sm">Quality hardware and expert contracting services in Kampala, Uganda. Building trust, delivering excellence.</p>
+                   <p id="userEmailDisplay" class="text-xs mt-2 text-gray-400"></p> </div>
+               <div>
+                   <h4 class="text-lg font-semibold text-white mb-4">Quick Links</h4>
+                   <ul class="space-y-2 text-sm">
+                       <li><a href="#home" class="hover:text-blue-400 transition-colors">Home</a></li>
+                       <li><a href="#store" class="hover:text-blue-400 transition-colors">Hardware Store</a></li>
+                       <li><a href="#services" class="hover:text-blue-400 transition-colors">Our Services</a></li>
+                       <li><a href="#deposit" class="hover:text-blue-400 transition-colors">Deposit Model</a></li>
+                   </ul>
+               </div>
+               <div>
+                   <h4 class="text-lg font-semibold text-white mb-4">Support</h4>
+                   <ul class="space-y-2 text-sm">
+                       <li><a href="#contact" class="hover:text-blue-400 transition-colors">Contact Us</a></li>
+                       <li><a href="#faq" class="hover:text-blue-400 transition-colors">FAQs (Placeholder)</a></li>
+                       <li><a href="#privacy" class="hover:text-blue-400 transition-colors">Privacy Policy (Placeholder)</a></li>
+                       <li><a href="#terms" class="hover:text-blue-400 transition-colors">Terms of Service (Placeholder)</a></li>
+                   </ul>
+               </div>
+               <div>
+                   <h4 class="text-lg font-semibold text-white mb-4">Connect With Us</h4>
+                   <div class="flex space-x-4 mb-4">
+                       <a href="#" aria-label="Facebook" class="text-gray-400 hover:text-white transition-colors"><i data-lucide="facebook" class="h-6 w-6"></i></a>
+                       <a href="#" aria-label="Twitter" class="text-gray-400 hover:text-white transition-colors"><i data-lucide="twitter" class="h-6 w-6"></i></a>
+                       <a href="#" aria-label="Instagram" class="text-gray-400 hover:text-white transition-colors"><i data-lucide="instagram" class="h-6 w-6"></i></a>
+                       <a href="#" aria-label="LinkedIn" class="text-gray-400 hover:text-white transition-colors"><i data-lucide="linkedin" class="h-6 w-6"></i></a>
+                   </div>
+                   <p class="text-sm">Subscribe to our newsletter for updates (Placeholder).</p>
+                   <form class="mt-2 flex">
+                       <input type="email" placeholder="Your email" class="w-full px-3 py-2 rounded-l-md text-gray-800 text-sm focus:outline-none">
+                       <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-r-md text-sm font-semibold">Go</button>
+                   </form>
+               </div>
+           </div>
+           <div class="border-t border-gray-700 pt-8 text-center text-sm">
+               <p>© <span id="currentYear"></span> Sterling Contractors. All Rights Reserved. Kampala, Uganda.</p>
+               <p class="mt-1">Designed with a minimalist approach, inspired by modern aesthetics.</p>
+           </div>
+       </div>
+   </footer>
+
+   <div id="authModal" class="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center p-4 z-50 hidden transition-opacity duration-300">
+       <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-md relative transform transition-all duration-300 scale-95 opacity-0" 
+            style="transition-property: transform, opacity; animation: modalEnter 0.3s forwards;">
+           <button id="closeAuthModalBtn" class="absolute top-4 right-4 text-gray-500 hover:text-gray-700">
+               <i data-lucide="x" class="h-7 w-7"></i>
+           </button>
+           <div id="authModalContent">
+               </div>
+       </div>
+   </div>
+   <style> @keyframes modalEnter { to { transform: scale(1); opacity: 1; } } </style>
+
+   <div id="aiEstimatorModal" class="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center p-4 z-50 hidden">
+       <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-lg relative">
+           <button id="closeAiEstimatorModalBtn" class="absolute top-4 right-4 text-gray-500 hover:text-gray-700">
+               <i data-lucide="x" class="h-7 w-7"></i>
+           </button>
+           <h2 class="text-2xl font-bold mb-6 text-gray-800">AI Project Estimator</h2>
+           <p class="text-gray-600 mb-4">Provide some details about your project for a preliminary estimate. This tool uses AI to give you a rough idea of costs.</p>
+           <form id="aiEstimatorForm" class="space-y-4">
+               <div>
+                   <label for="projectType" class="block text-sm font-medium text-gray-700">Project Type (e.g., New Build, Renovation)</label>
+                   <input type="text" id="projectType" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm">
+               </div>
+               <div>
+                   <label for="projectSize" class="block text-sm font-medium text-gray-700">Approximate Size (e.g., sqm, number of rooms)</label>
+                   <input type="text" id="projectSize" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm">
+               </div>
+               <div>
+                   <label for="projectDescription" class="block text-sm font-medium text-gray-700">Brief Description</label>
+                   <textarea id="projectDescription" rows="3" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm"></textarea>
+               </div>
+               <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg">Get AI Estimate</button>
+           </form>
+       </div>
+   </div>
+   
+   <button id="aiChatbotButton" class="fixed bottom-6 right-6 bg-blue-700 text-white p-4 rounded-full shadow-xl hover:bg-blue-800 transition-colors z-40">
+       <i data-lucide="message-circle" class="h-7 w-7"></i>
+   </button>
+
+   <div id="loadingIndicator" class="fixed inset-0 bg-white bg-opacity-75 flex items-center justify-center z-[100] hidden">
+       <div class="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-blue-600"></div>
+   </div>
+
+   <div id="toastNotification" class="fixed bottom-6 left-1/2 transform -translate-x-1/2 px-6 py-3 rounded-lg text-white shadow-lg z-[101] hidden opacity-0 translate-y-full">
+       <span id="toastMessage">Notification message</span>
+   </div>
+
+   <script>
+       // Set current year in footer
+       document.getElementById('currentYear').textContent = new Date().getFullYear();
+       // Initialize Lucide icons after DOM is ready and for dynamic content
+       // The main script already calls lucide.createIcons() at appropriate times.
+   </script>
+</body>
+</html>
